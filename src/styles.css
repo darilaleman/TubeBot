@@ -1,0 +1,2 @@
+body { margin: 0; overflow: hidden; background: #1a1a1a; touch-action: none; }
+#app { width: 100vw; height: 100vh; }
