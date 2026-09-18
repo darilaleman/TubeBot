@@ -15,14 +15,16 @@ export class TubeBot {
     public gridY: number;
 
     private scene: Phaser.Scene;
+    private container: Phaser.GameObjects.Container;
     private size: number;
     private dirX = 1;
     private dirY = 0;
     private segments: Segment[] = [];
     private pendingGrowthTexture: string | null = null;
 
-    constructor(scene: Phaser.Scene, x: number, y: number, size: number) {
+    constructor(scene: Phaser.Scene, container: Phaser.GameObjects.Container, x: number, y: number, size: number) {
         this.scene = scene;
+        this.container = container;
         this.size = size;
         this.gridX = x;
         this.gridY = y;
@@ -36,16 +38,15 @@ export class TubeBot {
         };
     }
 
-    /**
-     * Crea la máscara circular de un sprite. IMPORTANTE: nunca se añade
-     * a ningún Container ni a la escena (add=false), o dejaría de ser
-     * una plantilla de recorte invisible y se vería como un círculo blanco.
-     */
     private applyCircleMask(sprite: Phaser.GameObjects.Image, px: number, py: number, diameter: number): Phaser.GameObjects.Graphics {
         const maskShape = this.scene.make.graphics({}, false);
         maskShape.fillStyle(0xffffff);
         maskShape.fillCircle(0, 0, diameter / 2);
-        maskShape.setPosition(px, py);
+
+        // ✅ La máscara NO está en el contenedor, así que su posición debe ser
+        // en coordenadas de MUNDO (sumando la posición del contenedor).
+        maskShape.setPosition(this.container.x + px, this.container.y + py);
+
         sprite.setMask(maskShape.createGeometryMask());
         return maskShape;
     }
@@ -65,6 +66,8 @@ export class TubeBot {
             sprite = this.scene.add.circle(px, py, d / 2, 0x00e676).setDepth(60);
         }
 
+        // ✅ Solo añadimos el sprite al contenedor. La máscara va aparte.
+        this.container.add(sprite);
         return { x, y, sprite, maskShape };
     }
 
@@ -87,6 +90,7 @@ export class TubeBot {
             sprite = this.scene.add.circle(px, py, d / 2 * 0.7, 0x0288d1).setDepth(30);
         }
 
+        this.container.add(sprite);
         return { x, y, sprite, maskShape };
     }
 
@@ -105,7 +109,8 @@ export class TubeBot {
         seg.y = y;
         const { px, py } = this.cellCenter(x, y);
         seg.sprite.setPosition(px, py);
-        seg.maskShape?.setPosition(px, py);
+        // ✅ La máscara está fuera del contenedor → coordenadas de mundo.
+        seg.maskShape?.setPosition(this.container.x + px, this.container.y + py);
     }
 
     move() {

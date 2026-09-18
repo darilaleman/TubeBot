@@ -3,8 +3,7 @@ import { TubeBot } from '../objects/TubeBot';
 import { YouTubeChannel } from '../objects/YouTubeChannel';
 import { COLS, MOVE_DELAY } from '../config/GameConfig';
 import { platform } from '../../main';
-
-interface ChannelInfo { key: string; path: string; }
+import { CHANNEL_ASSETS } from '../config/channelAssets';
 
 export class GameScene extends Scene {
     private bot!: TubeBot;
@@ -17,22 +16,27 @@ export class GameScene extends Scene {
     private gw = 0;
     private gh = 0;
     private startTime = 0;
+    private shuffledChannels: string[] = [];
+    private channelIndex = 0;
 
     private gameContainer!: Phaser.GameObjects.Container;
     private uiContainer!: Phaser.GameObjects.Container;
+
+    // Margen de seguridad para que nada toque el borde
+    private readonly SAFE_MARGIN = 6;
 
     constructor() { super('GameScene'); }
 
     preload() {
         this.load.image('bot_head', 'assets/cubaplay_bot.png');
-        const channels: ChannelInfo[] = [
-            { key: 'ch_neuronita', path: 'assets/channels/cubanos.png' },
-            { key: 'ch_dany_balo', path: 'assets/channels/eliecer.png' },
-            { key: 'ch_alejandro', path: 'assets/channels/pichy.png' },
-            { key: 'ch_lachicadelos', path: 'assets/channels/jamaliche.png' },
-        ];
-        channels.forEach(c => this.load.image(c.key, c.path));
-        this.channelKeys = channels.map(c => c.key);
+
+        // Carga automática de TODOS los canales
+        Object.entries(CHANNEL_ASSETS).forEach(([key, url]) => {
+            this.load.image(key, url);
+        });
+
+        this.channelKeys = Object.keys(CHANNEL_ASSETS);
+        console.log(`✅ ${this.channelKeys.length} canales cargados automáticamente`);
 
         this.load.audio('sfx_eat', 'assets/audio/eat.mp3');
         this.load.audio('sfx_crash', 'assets/audio/crash.mp3');
@@ -64,35 +68,44 @@ export class GameScene extends Scene {
             uiY = gameH;
         }
 
-        this.gameContainer = this.add.container(0, 0).setSize(gameW, gameH);
+        // 1. Crear Contenedores
+        this.gameContainer = this.add.container(this.SAFE_MARGIN, this.SAFE_MARGIN).setSize(gameW - this.SAFE_MARGIN * 2, gameH - this.SAFE_MARGIN * 2);
         this.uiContainer = this.add.container(uiX, uiY).setSize(uiW, uiH);
 
-        // --- BORDE Y MARGEN VISUAL ---
-        
-        // 1. Borde exterior (Marco)
-        this.add.rectangle(gameW / 2, gameH / 2, gameW, gameH)
-            .setStrokeStyle(4, 0x555555) // Borde gris claro de 4px
-            .setDepth(-5);
+        // 2. Dibujar Fondos y BORDE VISUAL
+        const innerPadding = 4;
+        const drawW = gameW - this.SAFE_MARGIN * 2;
+        const drawH = gameH - this.SAFE_MARGIN * 2;
 
-        // 2. Fondo del área de juego (ligeramente más pequeño para crear margen interno)
-        const padding = 4; // Margen interno en píxeles
-        this.add.rectangle(gameW / 2, gameH / 2, gameW - padding * 2, gameH - padding * 2, 0x222222)
-            .setDepth(-10);
+        this.add.rectangle(gameW / 2, gameH / 2, drawW, drawH, 0x222222).setDepth(-10);
 
-        // Fondo del área UI
+        // Borde exterior
+        this.add.rectangle(gameW / 2, gameH / 2, drawW + 2, drawH + 2)
+            .setStrokeStyle(4, 0x555555)
+            .setDepth(5);
+
+        // Fondo UI
         this.add.rectangle(uiX + uiW / 2, uiY + uiH / 2, uiW, uiH, 0x111111).setDepth(-10);
 
-        // --- LÓGICA DEL JUEGO ---
+        // 3. Calcular Grid basado en el área ÚTIL (restando márgenes internos)
+        this.gridSize = Math.floor((drawW - innerPadding * 2) / COLS);
+        this.gw = Math.floor((drawW - innerPadding * 2) / this.gridSize);
+        this.gh = Math.floor((drawH - innerPadding * 2) / this.gridSize);
 
-        this.gridSize = Math.floor((gameW - padding * 2) / COLS); // Ajustamos grid al área útil
-        this.gw = Math.floor((gameW - padding * 2) / this.gridSize);
-        this.gh = Math.floor((gameH - padding * 2) / this.gridSize);
+        // ✅ 4. Inicializar la bolsa barajada ANTES de spawnear el primer canal
+        this.shuffledChannels = Phaser.Utils.Array.Shuffle([...this.channelKeys]);
+        this.channelIndex = 0;
 
-        // Centramos el bot considerando el padding
-        const startX = Math.floor(this.gw / 2);
-        const startY = Math.floor(this.gh / 2);
+        // 5. Inicializar Jugador PASANDO EL CONTENEDOR
+        this.bot = new TubeBot(
+            this,
+            this.gameContainer,
+            Math.floor(this.gw / 2),
+            Math.floor(this.gh / 2),
+            this.gridSize
+        );
 
-        this.bot = new TubeBot(this, startX, startY, this.gridSize);
+        // 6. Primer canal
         this.spawnChannel();
 
         this.createUI(isLandscape);
@@ -169,6 +182,7 @@ export class GameScene extends Scene {
 
     private spawnChannel() {
         if (this.channel) this.channel.destroy();
+
         let x = 0, y = 0, attempts = 0;
         do {
             x = Math.floor(Math.random() * this.gw);
@@ -176,8 +190,25 @@ export class GameScene extends Scene {
             attempts++;
         } while (this.bot.occupies(x, y) && attempts < 500);
 
-        const key = this.channelKeys.length ? this.channelKeys[Math.floor(Math.random() * this.channelKeys.length)] : undefined;
-        this.channel = new YouTubeChannel(this, x, y, this.gridSize, key);
+        // Sacamos de la bolsa barajada
+        let key: string | undefined;
+        if (this.shuffledChannels.length) {
+            if (this.channelIndex >= this.shuffledChannels.length) {
+                // Bolsa agotada → la rebarajamos
+                this.shuffledChannels = Phaser.Utils.Array.Shuffle([...this.channelKeys]);
+                this.channelIndex = 0;
+                console.log('🔀 Canales rebarajados');
+            }
+            key = this.shuffledChannels[this.channelIndex++];
+        }
+
+        // Blindaje: si por lo que sea no hay key, cae a la lista completa
+        if (!key && this.channelKeys.length) {
+            key = this.channelKeys[Math.floor(Math.random() * this.channelKeys.length)];
+            console.warn('⚠️ shuffledChannels vacío, usando fallback directo');
+        }
+
+        this.channel = new YouTubeChannel(this, this.gameContainer, x, y, this.gridSize, key);
     }
 
     private setupControls() {
